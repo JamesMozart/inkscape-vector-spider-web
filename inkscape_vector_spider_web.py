@@ -334,11 +334,13 @@ class RadialSpiderWeb(inkex.EffectExtension):
             )
             return
 
-        polylines = boundary_polylines(
-            path.to_absolute(),
-            samples_per_seg=24,
-            target_resample=2048,
-        )
+        polylines = [
+            r[0] for r in boundary_polylines(
+                path.to_absolute(),
+                samples_per_seg=24,
+                target_resample=2048,
+            )
+        ]
         if not polylines:
             inkex.errormsg("Invalid path.")
             return

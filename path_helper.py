@@ -91,15 +91,15 @@ def boundary_polylines(path, samples_per_seg=64, target_resample=None):
         if not poly:
             continue
 
+        is_closed = (
+            math.hypot(poly[0][0] - poly[-1][0],
+                        poly[0][1] - poly[-1][1]) < 1e-6
+        )
         if target_resample is not None and len(poly) >= 2:
-            is_closed = (
-                math.hypot(poly[0][0] - poly[-1][0],
-                           poly[0][1] - poly[-1][1]) < 1e-6
-            )
             arr = resample_polyline_by_arclength_np(
                 poly, target_resample, closed=is_closed
             )
             poly = [(float(x), float(y)) for x, y in arr]
 
-        polylines.append(poly)
+        polylines.append((poly, is_closed))
     return polylines
