@@ -1,15 +1,15 @@
 from inkex.paths import Move, Path
+import inkex
 import numpy as np
 import math
 
 
 def path_polyline(path, samples_per_seg=24):
     """Split an inkex Path into subpaths (lists of segments), then sample subpaths into polylines (list of (x, y))."""
-    subpaths = []
     current = []
     for seg in path:
         if isinstance(seg, Move) and current:
-            subpaths.append(current)
+            yield subpath_polyline(current, samples_per_seg)
             current = [seg]
         else:
             current.append(seg)
@@ -86,7 +86,6 @@ def resample_polyline_by_arclength_np(poly, n, closed):
 
 def boundary_polylines(path, samples_per_seg=64, target_resample=None):
     """Sample an inkex.Path into a list of polylines (each list of (x, y))."""
-    polylines = []
     for poly in path_polyline(path, samples_per_seg=samples_per_seg):
         if not poly:
             continue
@@ -101,5 +100,4 @@ def boundary_polylines(path, samples_per_seg=64, target_resample=None):
             )
             poly = [(float(x), float(y)) for x, y in arr]
 
-        polylines.append((poly, is_closed))
-    return polylines
+        yield (poly, is_closed)

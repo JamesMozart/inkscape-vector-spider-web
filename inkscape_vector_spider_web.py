@@ -29,8 +29,6 @@ from path_helper import boundary_polylines
 def polar_noise_batch(noise, xs, ys, cx, cy, scale, noise_type):
     """Vectorised polar noise: same coordinate transform as the scalar
     version, but accepts arrays and returns an array of the same shape."""
-    xs = np.asarray(xs, dtype=float)
-    ys = np.asarray(ys, dtype=float)
     dx = xs - cx
     dy = ys - cy
     r = np.hypot(dx, dy)
@@ -55,9 +53,6 @@ def sag_bezier_full_batch(p1_arr, p2_arr, sag, sag_noise_arr, rng, sag_jitter):
         ds:       list[str]   — one path 'd' string per edge
         segs:     list[tuple] — one (p1, ctrl, p2) per edge
     """
-    p1_arr = np.asarray(p1_arr, dtype=float)
-    p2_arr = np.asarray(p2_arr, dtype=float)
-    sag_noise_arr = np.asarray(sag_noise_arr, dtype=float)
     n = p1_arr.shape[0]
 
     # per-edge random factor, drawn in one shot
@@ -158,63 +153,58 @@ def centroid(polylines):
 # ============================================================
 # Web generation
 # ============================================================
+import math
+import numpy as np
+
+
 def generate_web(center, polylines, n_rays, n_rings, min_radius,
                  ring_growth, angle_jitter, radius_jitter,
                  sag, sag_jitter, spoke_curve, seed,
                  noise_type, noise_scale, spoke_phase=0.0):
-    """Build web vertices."""
-    rng = np.random.default_rng(seed)
+    """Build web vertices (vectorized)."""
     noise = SimplexNoise(seed=seed)
     cx, cy = center
 
+    # ---------- ring fractions ----------
     if n_rings <= 1:
         ring_fracs = np.array([1.0])
     else:
-        raw = np.array([ring_growth ** i for i in range(n_rings)])
+        raw = ring_growth ** np.arange(n_rings, dtype=float)
         raw = (raw - raw[0]) / (raw[-1] - raw[0])
         ring_fracs = raw
-    ring_fracs = np.asarray(ring_fracs, dtype=float)
 
-    all_pts = []
-    for poly in polylines:
-        for pt in poly:
-            if not all_pts or (abs(pt[0] - all_pts[-1][0]) > 1e-9
-                               or abs(pt[1] - all_pts[-1][1]) > 1e-9):
-                all_pts.append((pt[0], pt[1]))
-    # If the boundary is closed, drop the duplicated first point at the end
-    if len(all_pts) > 1:
-        fx, fy = all_pts[0]
-        lx, ly = all_pts[-1]
-        if abs(fx - lx) < 1e-9 and abs(fy - ly) < 1e-9:
-            all_pts.pop()
-
-    n_pts = len(all_pts)
-    if n_pts == 0:
-        # Extreme fallback: degenerate to center point, all rays use min_radius
-        hit_pts = [(cx + min_radius, cy)] * n_rays
+    # ---------- flatten polylines into one (N, 2) array ----------
+    if polylines:
+        all_pts = np.concatenate(
+            [poly for poly, _ in polylines],
+            axis=0,
+        )
     else:
-        # Phase offset: shift the starting index by the number of points
-        # corresponding to spoke_phase
-        phase_frac = (spoke_phase % (2.0 * math.pi)) / (2.0 * math.pi)
-        start_idx = int(round(phase_frac * n_pts))
-        idxs = np.linspace(0, n_pts, n_rays, endpoint=False).astype(int)
-        hit_pts = [all_pts[(i + start_idx) % n_pts] for i in idxs]
+        all_pts = np.empty((0, 2), dtype=float)
 
-    # 3) Derive angle and radius from center to hit point
-    base_angles = np.array([
-        math.atan2(py - cy, px - cx) for (px, py) in hit_pts
-    ])
-    ray_radius = np.array([
-        max(math.hypot(px - cx, py - cy), min_radius)
-        for (px, py) in hit_pts
-    ])
+    n_pts = all_pts.shape[0]
+    if n_pts == 0:
+        return [], [], [], noise
+
+    # ---------- sample hit points (vectorized) ----------
+    phase_frac = (spoke_phase % (2.0 * math.pi)) / (2.0 * math.pi)
+    start_idx = int(round(phase_frac * n_pts))
+    idxs = np.linspace(0, n_pts, n_rays, endpoint=False).astype(int)
+    hit_idx = (idxs + start_idx) % n_pts
+    hit_pts = all_pts[hit_idx]                     # (n_rays, 2)
+
+    # ---------- angles & radii (vectorized) ----------
+    dx = hit_pts[:, 0] - cx
+    dy = hit_pts[:, 1] - cy
+    base_angles = np.arctan2(dy, dx)               # (n_rays,)
+    ray_radius = np.maximum(np.hypot(dx, dy), min_radius)
 
     max_jitter_angle = angle_jitter * (2.0 * math.pi / n_rays) * 0.5
     max_jitter_radius_frac = radius_jitter * 0.5
 
-    n_ring_pts = len(ring_fracs)
+    n_ring_pts = ring_fracs.shape[0]
 
-    # --- Batch: rotation noise for all rings (depends on frac and ray_radius.mean()) ---
+    # ---------- ring rotation noise (batch) ----------
     ring_rot_xs = cx + ring_fracs * ray_radius.mean()
     ring_rot_ys = np.full(n_ring_pts, cy, dtype=float)
     ring_rot_ns = polar_noise_batch(
@@ -222,34 +212,39 @@ def generate_web(center, polylines, n_rays, n_rings, min_radius,
     )
 
     verts = []
-    for ri, frac in enumerate(ring_fracs):
+    outer_idx = n_ring_pts - 1
+
+    # Precompute sin/cos of base angles (reused by the outer ring)
+    cos_base = np.cos(base_angles)
+    sin_base = np.sin(base_angles)
+
+    for ri in range(n_ring_pts):
+        frac = ring_fracs[ri]
         ring_rot = float(ring_rot_ns[ri]) * max_jitter_angle * 0.5
 
-        is_outer = (ri == len(ring_fracs) - 1)
-
-        if is_outer:
-            ring_pts = []
-            for ai in range(n_rays):
-                a = float(base_angles[ai])
-                rr = float(ray_radius[ai])
-                x = cx + rr * math.cos(a)
-                y = cy + rr * math.sin(a)
-                ring_pts.append((x, y))
-            verts.append(ring_pts)
+        if ri == outer_idx:
+            # Outer ring: use hit radius and angle directly, no noise
+            x = cx + ray_radius * cos_base
+            y = cy + ray_radius * sin_base
+            verts.append(np.column_stack((x, y)))
             continue
 
-        # ---- Batch-prepare sample coordinates for all vertices of this ring ----
+        # ---------- inner ring: fully vectorized ----------
         a_arr = base_angles + ring_rot
         rr_arr = min_radius + (ray_radius - min_radius) * frac
-        px_arr = cx + rr_arr * np.cos(a_arr)
-        py_arr = cy + rr_arr * np.sin(a_arr)
 
-        tx_arr = -np.sin(a_arr)
-        ty_arr = np.cos(a_arr)
+        cos_a = np.cos(a_arr)
+        sin_a = np.sin(a_arr)
+
+        px_arr = cx + rr_arr * cos_a
+        py_arr = cy + rr_arr * sin_a
+
+        # Tangential direction (-sin, cos)
+        tx_arr = -sin_a
+        ty_arr = cos_a
         px2_arr = px_arr + tx_arr * rr_arr * 0.5
         py2_arr = py_arr + ty_arr * rr_arr * 0.5
 
-        # Two batches of noise, one batch call each
         n_ang_arr = polar_noise_batch(
             noise, px_arr, py_arr, cx, cy, noise_scale, noise_type
         )
@@ -257,17 +252,13 @@ def generate_web(center, polylines, n_rays, n_rings, min_radius,
             noise, px2_arr, py2_arr, cx, cy, noise_scale, noise_type
         )
 
-        # ---- Apply per vertex (pure numeric, no noise calls) ----
-        ring_pts = []
-        for ai in range(n_rays):
-            a = float(a_arr[ai]) + float(n_ang_arr[ai]) * max_jitter_angle
-            rr_j = float(rr_arr[ai]) * (
-                1.0 + float(n_rad_arr[ai]) * max_jitter_radius_frac
-            )
-            x = cx + rr_j * math.cos(a)
-            y = cy + rr_j * math.sin(a)
-            ring_pts.append((x, y))
-        verts.append(ring_pts)
+        # Apply angle / radius jitter in one shot
+        a_final = a_arr + n_ang_arr * max_jitter_angle
+        rr_final = rr_arr * (1.0 + n_rad_arr * max_jitter_radius_frac)
+
+        x = cx + rr_final * np.cos(a_final)
+        y = cy + rr_final * np.sin(a_final)
+        verts.append(np.column_stack((x, y)))
 
     return verts, base_angles, ray_radius, noise
 
@@ -312,16 +303,22 @@ class RadialSpiderWeb(inkex.EffectExtension):
         )
 
     def _get_selected_path(self):
+        """Return a single merged Path combining every selected path element,
+        ignoring groups (and non-path selections)."""
+        ds = []
         for el in self.svg.selection.values():
-            if isinstance(el, PathElement) or hasattr(el, "path"):
-                try:
-                    path = el.path
-                except Exception:
-                    continue
-                # Bake element + ancestor transforms into path coordinates
-                path = path.transform(el.composed_transform())
-                return path
-        return None
+            if not (isinstance(el, PathElement) or hasattr(el, "path")):
+                continue
+            try:
+                path = el.path
+            except Exception:
+                continue
+            # Bake element + ancestor transforms into path coordinates
+            path = path.transform(el.composed_transform())
+            ds.append(str(path.to_absolute()))
+        if not ds:
+            return None
+        return inkex.Path(' '.join(ds))
 
     def effect(self):
         o = self.options
@@ -334,23 +331,24 @@ class RadialSpiderWeb(inkex.EffectExtension):
             )
             return
 
-        polylines = [
-            r[0] for r in boundary_polylines(
-                path.to_absolute(),
-                samples_per_seg=24,
-                target_resample=2048,
-            )
-        ]
-        if not polylines:
+        bbox = path.bounding_box()
+
+        if not bbox:
             inkex.errormsg("Invalid path.")
             return
 
-        x0, y0, x1, y1 = boundary_bbox(polylines)
+        polylines = boundary_polylines(
+            path,
+            samples_per_seg=24,
+            target_resample=2048,
+        )
+        
+        x0, y0 = bbox.left, bbox.top
+        x1, y1 = bbox.right, bbox.bottom
         w = x1 - x0
         h = y1 - y0
         cx = (x0 + x1) / 2 + (o.center_offset_x / 100.0) * w
         cy = (y0 + y1) / 2 + (o.center_offset_y / 100.0) * h
-        # cx, cy = centroid(polylines)
 
         rng = np.random.default_rng(o.seed)
 
@@ -371,6 +369,10 @@ class RadialSpiderWeb(inkex.EffectExtension):
             noise_scale=o.noise_scale,
             spoke_phase=math.radians(o.spoke_phase),
         )
+
+        if not verts:
+            inkex.errormsg("Invalid path.")
+            return
 
         layer = self.svg.get_current_layer()
 
@@ -446,8 +448,7 @@ class RadialSpiderWeb(inkex.EffectExtension):
                             f"Q {mid_x[i]:.4f},{mid_y[i]:.4f} "
                             f"{p_arr[i, 0]:.4f},{p_arr[i, 1]:.4f}"
                         )
-                    path = PathElement()
-                    path.set("d", " ".join(d_parts))
+                    path = PathElement(d=" ".join(d_parts))
                     path.style = {
                         "stroke": o.stroke_spoke,
                         "stroke-width": f"{o.spoke_width}",
@@ -510,8 +511,7 @@ class RadialSpiderWeb(inkex.EffectExtension):
             for idx, (ri, ai, _p1, _p2, _mx, _my) in enumerate(ring_edge_info):
                 ring_seg[ri][ai] = segs[idx]
                 if want_strokes:
-                    path = PathElement()
-                    path.set("d", ds[idx])
+                    path = PathElement(d=ds[idx])
                     path.style = {
                         "stroke": o.stroke_ring,
                         "stroke-width": f"{o.ring_width}",
@@ -547,8 +547,7 @@ class RadialSpiderWeb(inkex.EffectExtension):
                     parts.append(f"Q {_fmt(l_c)} {_fmt(c_in_left)}")
                     parts.append("Z")
 
-                    cell = PathElement()
-                    cell.set("d", " ".join(parts))
+                    cell = PathElement(d=" ".join(parts))
                     cell.style = {
                         "fill": o.cell_fill,
                         "fill-opacity": f"{o.cell_fill_opacity}",
