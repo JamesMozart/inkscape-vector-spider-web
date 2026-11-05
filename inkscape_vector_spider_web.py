@@ -438,6 +438,7 @@ class RadialSpiderWeb(inkex.EffectExtension):
 
             if want_strokes:
                 # One path per spoke: M first + several Q
+                paths = []
                 for ai in range(o.n_rays):
                     d_parts = []
                     first = verts[0][ai]
@@ -455,7 +456,8 @@ class RadialSpiderWeb(inkex.EffectExtension):
                         "stroke-linecap": "round",
                         "fill": "none",
                     }
-                    group.append(path)
+                    paths.append(path)
+                group.extend(paths)
 
         # ring_seg[ri][ai] = (p1, ctrl, p2), direction ai -> ai+1
         ring_seg = [[None] * o.n_rays for _ in range(n_rings)]
@@ -508,6 +510,7 @@ class RadialSpiderWeb(inkex.EffectExtension):
             ds, segs = sag_bezier_full_batch(
                 p1_arr, p2_arr, o.sag, sag_ns, rng, o.sag_jitter
             )
+            paths = []
             for idx, (ri, ai, _p1, _p2, _mx, _my) in enumerate(ring_edge_info):
                 ring_seg[ri][ai] = segs[idx]
                 if want_strokes:
@@ -518,13 +521,15 @@ class RadialSpiderWeb(inkex.EffectExtension):
                         "stroke-linecap": "round",
                         "fill": "none",
                     }
-                    group.append(path)
+                    paths.append(path)
+            group.extend(paths)
 
         # --- Cell polygons: emit only if want_cells ---
         if want_cells:
             def _fmt(pt):
                 return f"{pt[0]:.4f},{pt[1]:.4f}"
 
+            cells = []
             for ri in range(n_rings - 1):
                 for ai in range(o.n_rays):
                     ai_next = (ai + 1) % o.n_rays
@@ -554,7 +559,8 @@ class RadialSpiderWeb(inkex.EffectExtension):
                         "stroke": o.cell_stroke,
                         "stroke-width": f"{o.cell_stroke_width}",
                     }
-                    cell_group.append(cell)
+                    cells.append(cell)
+            cell_group.extend(cells)
 
         # Make the generated elements the active selection
         if want_strokes and want_cells:
