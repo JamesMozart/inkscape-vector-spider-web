@@ -18,12 +18,17 @@ def path_polyline(path, samples_per_seg=24):
 
 
 def subpath_polyline(subpath, samples_per_seg=24):
-    """Sample a subpath into a polyline (list of (x, y))."""
+    """Sample a subpath into a polyline (Nx2 float64 array)."""
     if not subpath:
-        return []
+        return np.empty((0, 2), dtype=np.float64)
 
     path = Path(subpath)
-    poly = []
+
+    # Precompute parameter samples once (skip t=0; start point is added
+    # explicitly via Move, so segments only need t in (0, 1]).
+    ts = np.linspace(0.0, 1.0, samples_per_seg + 1)[1:]
+
+    chunks = []
     subpath_start = None
     last_point = None
 
@@ -32,9 +37,10 @@ def subpath_polyline(subpath, samples_per_seg=24):
 
         if name == "Move":
             p = proxy.end_point
-            poly.append((p.x, p.y))
-            subpath_start = (p.x, p.y)
-            last_point = (p.x, p.y)
+            pt = (p.x, p.y)
+            chunks.append(np.asarray([pt], dtype=np.float64))
+            subpath_start = pt
+            last_point = pt
             continue
 
         if name == "ZoneClose":
@@ -42,19 +48,28 @@ def subpath_polyline(subpath, samples_per_seg=24):
                 sx, sy = subpath_start
                 lx, ly = last_point
                 if math.hypot(sx - lx, sy - ly) > 1e-9:
-                    for i in range(1, samples_per_seg + 1):
-                        t = i / samples_per_seg
-                        poly.append((lx + t * (sx - lx), ly + t * (sy - ly)))
+                    # Vectorized straight-line sampling
+                    seg = np.column_stack((
+                        lx + ts * (sx - lx),
+                        ly + ts * (sy - ly),
+                    ))
+                    chunks.append(seg)
             last_point = subpath_start
             continue
 
         for i in range(1, samples_per_seg + 1):
             t = i / samples_per_seg
             p = proxy.point(t)
-            poly.append((p.x, p.y))
-        last_point = (p.x, p.y)
+            chunks.append(np.column_stack((
+                p.x,
+                p.y,
+            )))
+            last_point = p
 
-    return poly
+    if not chunks:
+        return np.empty((0, 2), dtype=np.float64)
+
+    return np.concatenate(chunks, axis=0)
 
 
 def resample_polyline_by_arclength_np(poly, n, closed):
@@ -87,7 +102,7 @@ def resample_polyline_by_arclength_np(poly, n, closed):
 def boundary_polylines(path, samples_per_seg=64, target_resample=None):
     """Sample an inkex.Path into a list of polylines (each list of (x, y))."""
     for poly in path_polyline(path, samples_per_seg=samples_per_seg):
-        if not poly:
+        if len(poly) == 0:
             continue
 
         is_closed = (
@@ -95,9 +110,8 @@ def boundary_polylines(path, samples_per_seg=64, target_resample=None):
                         poly[0][1] - poly[-1][1]) < 1e-6
         )
         if target_resample is not None and len(poly) >= 2:
-            arr = resample_polyline_by_arclength_np(
+            poly = resample_polyline_by_arclength_np(
                 poly, target_resample, closed=is_closed
             )
-            poly = [(float(x), float(y)) for x, y in arr]
 
         yield (poly, is_closed)
