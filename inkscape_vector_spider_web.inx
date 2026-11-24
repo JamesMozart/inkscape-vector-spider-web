@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Vector Spider Web</name>
+    <id>org.example.inkscapevectorspiderweb</id>
+
+    <hbox>
+        <!-- ================= Left column ================= -->
+        <vbox>
+            <param name="n_rays" type="int" gui-text="Number of radial spokes" min="1" max="100">14</param>
+            <param name="n_rings" type="int" gui-text="Number of rings" min="1" max="100">7</param>
+            <param name="min_radius" type="float" gui-text="Innermost ring radius" min="0" max="10000">12.0</param>
+            <param name="ring_growth" type="float" gui-text="Ring spacing growth (1 = uniform)">1.35</param>
+            <param name="angle_jitter" type="float" gui-text="Angle jitter (0-1)" min="0" max="1">0.18</param>
+            <param name="radius_jitter" type="float" gui-text="Radius jitter (0-1)" min="0" max="1">0.10</param>
+            <param name="sag" type="float" gui-text="Arc sag (0 = straight)">0.12</param>
+            <param name="sag_jitter" type="float" gui-text="Sag jitter (0-1)" min="0" max="1">0.5</param>
+            <param name="spoke_curve" type="float" gui-text="Spoke curve (0 = straight)">0.03</param>
+            <param name="spoke_phase" type="float" min="-180" max="180" precision="1" gui-text="Spoke phase offset (°)">0</param>
+        </vbox>
+
+        <separator/>
+
+        <!-- ================= Right column ================= -->
+        <vbox>
+            <param name="noise_type" type="optiongroup" appearance="combo"
+                   gui-text="Noise type">
+                <option value="simplex">Simplex</option>
+                <option value="fbm">FBM (fractal)</option>
+                <option value="turbulence">Turbulence</option>
+            </param>
+            <param name="noise_scale" type="float" min="0.001" max="100" gui-text="Noise Scale (Smaller = smoother)">1</param>
+            <param name="seed" type="int" gui-text="Random seed" min="0" max="2147483647">42</param>
+            <param name="web_error_prob" type="float" min="0" max="1" precision="3" gui-text="Web error probability">0.0</param>
+            <param name="center_offset_x" type="float" min="-1000" max="1000" precision="2" gui-text="Center offset X (% of width)">0.0</param>
+            <param name="center_offset_y" type="float" min="-1000" max="1000" precision="2" gui-text="Center offset Y (% of height)">0.0</param>
+            <param name="spoke_width" type="float" gui-text="Spoke stroke width" min="0" max="10000">1</param>
+            <param name="ring_width" type="float" gui-text="Ring stroke width" min="0" max="10000">1</param>
+            <param name="generate_mode" type="optiongroup" appearance="combo"
+                   gui-text="Generate mode">
+                <option value="strokes">Strokes</option>
+                <option value="cells">Polygons</option>
+                <option value="both">Both</option>
+            </param>
+        </vbox>
+    </hbox>
+
+    <effect>
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Generate from Path"/>
+        </effects-menu>
+    </effect>
+
+    <script>
+        <command location="inx" interpreter="python">inkscape_vector_spider_web.py</command>
+    </script>
+</inkscape-extension>
